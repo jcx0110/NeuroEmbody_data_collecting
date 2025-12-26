@@ -72,4 +72,3 @@ NeuroEmbody_data_collecting/
 ## License
 
 [Add your license here]
-

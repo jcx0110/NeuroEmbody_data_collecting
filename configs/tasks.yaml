@@ -1,0 +1,51 @@
+# ==========================================
+# Category 1: Spatial/State Episodic Memory
+# ==========================================
+
+find_occluded_apple:
+  description: "Retrieve the apple that was placed into a box and is currently occluded."
+  stages_num: 2
+  instructions:
+    - "Observe the user placing the apple into the target box."
+    - "Find the apple in the box."
+
+restore_blocks:
+  description: "Restore the blocks from the basket back to their initial observed positions."
+  stages_num: 2
+  instructions:
+    - "Grasp the block from the basket."
+    - "Move the block to its remembered initial position."
+
+
+# ==========================================
+# Category 2: Interaction-based Episodic Memory 
+# ==========================================
+
+serve_user_plate:
+  description: "Place the fruit onto the plate belonging to User A, distinguished by placement history."
+  stages_num: 2
+  instructions:
+    - "Observe which plate was placed by User A"
+    - "Grasp the fruit and place the fruit on the plate."
+
+
+remove_allergen_food:
+  description: "Identify and discard food items that have come into contact with the allergen model."
+  stages_num: 3
+  instructions:
+    - "Place the allergen model (spiky ball) onto the target plate."
+    - "Remove the allergen model from the plate."
+    - "Grasp the contaminated plate and place it in the disposal bin."
+
+
+# ==========================================
+# Category 3: Temporal/Procedural Episodic Memory
+# ==========================================
+seasoning_process:
+  description: "Season the dish with salt, sugar, and pepper. Each ingredient must be added exactly once."
+  stages_num: 1
+  instructions:
+    - "Add salt, sugar and pepper to the cooked food."
+
+
+task: "find_occluded_apple"

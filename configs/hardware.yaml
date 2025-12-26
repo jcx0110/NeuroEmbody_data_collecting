@@ -1,0 +1,25 @@
+robot:
+  type: "ur"
+  ip: "192.168.1.2"
+  port: 6001
+
+gripper:
+  type: "robotiq_2f85"
+  ip: "192.168.1.11"
+
+cameras:
+  front:
+    type: "realsense"
+    device_id: "333422303297"
+    width: 640
+    height: 480
+    fps: 30
+  side:
+    type: "realsense"
+    device_id: "243222075882"
+    width: 640
+    height: 480
+    fps: 30
+
+storage:
+  save_dir: "./output"

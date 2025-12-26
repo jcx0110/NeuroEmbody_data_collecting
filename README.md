@@ -22,7 +22,9 @@ Data collection framework for NeuroEmbody project.
 ## Installation
 
 ```bash
-pip install pyrealsense2 opencv-python numpy h5py tyro
+git clone https://github.com/jcx0110/NeuroEmbody_data_collecting
+cd NeuroEmbody_data_collecting
+pip install requirements.txt
 ```
 
 ## Configuration

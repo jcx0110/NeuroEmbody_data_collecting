@@ -82,6 +82,22 @@ cleanup() {
 # MAIN EXECUTION
 # ===========================================
 
+# Ensure conda environment is activated (if conda is available)
+if [ -f "$HOME/anaconda3/etc/profile.d/conda.sh" ]; then
+    source "$HOME/anaconda3/etc/profile.d/conda.sh"
+    conda activate NeuroEmbody 2>/dev/null || true
+elif [ -f "$HOME/miniconda3/etc/profile.d/conda.sh" ]; then
+    source "$HOME/miniconda3/etc/profile.d/conda.sh"
+    conda activate NeuroEmbody 2>/dev/null || true
+fi
+
+# Verify Python path
+PYTHON_CMD=$(which python)
+if [ -z "$PYTHON_CMD" ]; then
+    PYTHON_CMD="python3"
+fi
+log_info "Using Python: $PYTHON_CMD"
+
 trap cleanup SIGINT SIGTERM EXIT
 
 print_header "Start NeuroEmbody Data Collection"
@@ -92,7 +108,7 @@ echo "-----------Step 1/2: Launching Robot Server for UR5-----------"
 log_info "Target IP: $ROBOT_IP"
 
 # Start server in background and capture PID
-python data_collecting/core/arm_server.py &
+$PYTHON_CMD data_collecting/core/arm_server.py &
 SERVER_PID=$!
 
 # Create a new process group for the server to make cleanup easier
@@ -127,7 +143,7 @@ echo "" # Empty line for separation
 # Start data collection client in foreground (needs keyboard input)
 # When user presses Ctrl+C or 'q', this will exit and trigger cleanup
 log_info "Starting Data Collection Client..."
-python data_collecting/core/run_data_collecting.py 2>/dev/null
+$PYTHON_CMD data_collecting/core/run_data_collecting.py 2>/dev/null
 
 CLIENT_EXIT_CODE=$?
 

@@ -120,14 +120,106 @@ class URRobot(Robot):
         """Return a dictionary of robot observations."""
         joints = self.get_joint_state()
         
-        # Placeholder for EE pose if needed later
-        pos_quat = np.zeros(7) 
+        # Try to get actual TCP pose from RTDE
+        try:
+            # RTDE provides getActualTCPPose() which returns [x, y, z, rx, ry, rz]
+            # where rx, ry, rz are rotation vector (axis-angle representation)
+            tcp_pose = self.r_inter.getActualTCPPose()
+            if tcp_pose is not None and len(tcp_pose) >= 6:
+                # Check if pose is valid (not all zeros)
+                if not np.allclose(tcp_pose[:3], 0.0, atol=1e-6):
+                    # Convert rotation vector to quaternion
+                    # Rotation vector: [rx, ry, rz] where magnitude is rotation angle
+                    rot_vec = tcp_pose[3:6]
+                    angle = np.linalg.norm(rot_vec)
+                    
+                    if angle > 1e-6:  # Non-zero rotation
+                        # Normalize rotation vector to get axis
+                        axis = rot_vec / angle
+                        # Convert axis-angle to quaternion: q = [cos(θ/2), sin(θ/2) * axis]
+                        half_angle = angle / 2.0
+                        qw = np.cos(half_angle)
+                        qxyz = np.sin(half_angle) * axis
+                        quat = np.array([qw, qxyz[0], qxyz[1], qxyz[2]])  # [w, x, y, z]
+                    else:
+                        # Zero rotation -> identity quaternion
+                        quat = np.array([1.0, 0.0, 0.0, 0.0])  # [w, x, y, z]
+                    
+                    # Store as [x, y, z, qx, qy, qz, qw] (position + quaternion)
+                    # Note: Converting from [w, x, y, z] to [x, y, z, w] format
+                    pos_quat = np.concatenate([tcp_pose[:3], quat[1:], [quat[0]]])
+                else:
+                    # TCP pose is all zeros, use zeros
+                    pos_quat = np.zeros(7)
+            else:
+                # TCP pose is None or invalid, use zeros
+                pos_quat = np.zeros(7)
+        except Exception as e:
+            # If getting TCP pose fails, log warning only once (to avoid spam)
+            # Use a simple counter to limit logging frequency
+            if not hasattr(self, '_tcp_pose_warn_count'):
+                self._tcp_pose_warn_count = 0
+            if self._tcp_pose_warn_count < 3:
+                log.warn(f"Failed to get TCP pose from RTDE (will retry): {e}")
+                self._tcp_pose_warn_count += 1
+            pos_quat = np.zeros(7)
         
+        # Get gripper position from joints (already normalized in get_joint_state)
         gripper_pos = np.array([joints[-1]]) if self._use_gripper else np.array([0.0])
+        
+        # Try to get actual joint velocities from RTDE
+        try:
+            joint_velocities = self.r_inter.getActualQd()
+            if joint_velocities is None or len(joint_velocities) == 0:
+                joint_velocities = np.zeros_like(joints[:6])
+            # Append gripper velocity (0 for now, as gripper doesn't provide velocity)
+            if self._use_gripper:
+                joint_velocities = np.append(joint_velocities, 0.0)
+        except Exception as e:
+            # If getting velocities fails, use zeros
+            joint_velocities = np.zeros_like(joints)
+        
+        # Try to get TCP velocity from RTDE (linear and angular velocity)
+        ee_velocity = np.zeros(3)  # Linear velocity [vx, vy, vz] in m/s
+        ee_angular_velocity = np.zeros(3)  # Angular velocity [wx, wy, wz] in rad/s
+        try:
+            # RTDE provides getActualTCPSpeed() which returns [vx, vy, vz, wx, wy, wz]
+            # where vx,vy,vz is linear velocity (m/s) and wx,wy,wz is angular velocity (rad/s)
+            if hasattr(self.r_inter, 'getActualTCPSpeed'):
+                tcp_speed = self.r_inter.getActualTCPSpeed()
+                if tcp_speed is not None and len(tcp_speed) >= 6:
+                    # Check if speed is valid (not all zeros or NaN)
+                    if not (np.allclose(tcp_speed, 0.0, atol=1e-6) or np.any(np.isnan(tcp_speed))):
+                        # Store linear velocity [vx, vy, vz] as ee_velocity (in m/s)
+                        ee_velocity = tcp_speed[:3]
+                        # Store angular velocity [wx, wy, wz] as ee_angular_velocity (in rad/s)
+                        ee_angular_velocity = tcp_speed[3:6]
+                    else:
+                        ee_velocity = np.zeros(3)
+                        ee_angular_velocity = np.zeros(3)
+                else:
+                    ee_velocity = np.zeros(3)
+                    ee_angular_velocity = np.zeros(3)
+            else:
+                # RTDE version doesn't support getActualTCPSpeed(), use zeros
+                ee_velocity = np.zeros(3)
+                ee_angular_velocity = np.zeros(3)
+        except Exception as e:
+            # If getting TCP speed fails, use zeros
+            # Note: Some RTDE versions may not support getActualTCPSpeed()
+            if not hasattr(self, '_tcp_speed_warn_count'):
+                self._tcp_speed_warn_count = 0
+            if self._tcp_speed_warn_count < 1:
+                log.warn(f"RTDE getActualTCPSpeed() not available or failed: {e}. Using zeros for EE velocity.")
+                self._tcp_speed_warn_count += 1
+            ee_velocity = np.zeros(3)
+            ee_angular_velocity = np.zeros(3)
         
         return {
             "joint_positions": joints,
-            "joint_velocities": joints, # Warning: This seems to copy positions; consider getting actual velocities if needed
+            "joint_velocities": joint_velocities,
             "ee_pos_quat": pos_quat,
+            "ee_velocity": ee_velocity,  # TCP linear velocity [vx, vy, vz] in m/s
+            "ee_angular_velocity": ee_angular_velocity,  # TCP angular velocity [wx, wy, wz] in rad/s
             "gripper_position": gripper_pos,
         }

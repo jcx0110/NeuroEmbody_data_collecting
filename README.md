@@ -43,7 +43,6 @@ Edit `configs/tasks.yaml` to configure:
 ### Start Data Collection
 
 ```bash
-cd NeuroEmbody_data_collecting
 bash scripts/data_collecting.sh
 ```
 

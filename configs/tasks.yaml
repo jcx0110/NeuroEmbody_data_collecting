@@ -2,12 +2,12 @@
 # Category 1: Spatial/State Episodic Memory
 # ==========================================
 
-find_occluded_apple:
-  description: "Retrieve the apple that was placed into a box and is currently occluded."
+find_occluded_cube:
+  description: "Retrieve the cube that was placed into a drawer and is currently occluded."
   stages_num: 2
   instructions:
-    - "Observe the user placing the apple into the target box."
-    - "Find the apple in the box."
+    - "Observe the user placing the cube into the target drawer."
+    - "Find the cube in the drawer."
 
 restore_blocks:
   description: "Restore the blocks from the basket back to their initial observed positions."
@@ -48,4 +48,4 @@ seasoning_process:
     - "Add salt, sugar and pepper to the cooked food."
 
 
-task: "find_occluded_apple"
+task: "find_occluded_cube"

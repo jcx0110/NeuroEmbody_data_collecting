@@ -2,6 +2,7 @@ import os
 os.environ['QT_LOGGING_RULES'] = "qt.qpa.*=false"
 
 from pathlib import Path
+import threading
 import time
 import sys
 
@@ -38,6 +39,19 @@ task_cfg = cfg_loader.get_task()
 hardware_cfg = cfg_loader.hardware
 cameras_cfg = hardware_cfg.get("cameras", {})
 
+def save_worker(saver, data, idx, instructions, frames, stages):
+    try:
+        log.info(f"Background thread starting save for Episode {idx}...")
+        result = saver.save_episode(data, idx, instructions, frames, stages)
+        if result:
+            log.success(f"Episode {idx} saved successfully!")
+        else:
+            log.error(f"Episode {idx} save failed!")
+    except Exception as e:
+        log.error(f"Exception in save_worker for Episode {idx}: {e}")
+        import traceback
+        log.error(f"Traceback: {traceback.format_exc()}")
+
 @dataclass
 class Args:
     # Network / Robot
@@ -54,7 +68,7 @@ class Args:
     side_camera_id: str = cameras_cfg.get("side", {}).get("device_id", "default")
     
     # Collection Settings
-    hz: int = 100
+    hz: int = 30
     data_dir: str = cfg_loader.get_storage_dir()
     task_name: str = task_cfg.get("name", "default_task")
     
@@ -72,18 +86,24 @@ def main(args: Args):
     if not save_path.exists():
         save_path.mkdir(parents=True, exist_ok=True)
         episode_idx = 0
+
     else:
         existing_episodes = list(save_path.glob("episode_*.h5"))
         if not existing_episodes:
             episode_idx = 0
         else:
             try:
-                indices = [int(f.name.split('_')[1]) for f in existing_episodes]
-                episode_idx = max(indices) + 1
-            except (IndexError, ValueError):
-                log.warn("Starting from episode idx 0.")
+                indices = []
+                for f in existing_episodes:
+                    parts = f.stem.split('_')
+                    if len(parts) >= 2:
+                        indices.append(int(parts[1]))
+                
+                episode_idx = max(indices) + 1 if indices else 0
+            except (IndexError, ValueError) as e:
+                log.warn(f"Starting from episode idx 0.")
                 episode_idx = 0
-    
+
     log.info(f"Auto-resuming: Next Episode Index will be {episode_idx}")
 
     # Load task instructions from config (e.g. ["Pick apple", "Place apple"])
@@ -252,34 +272,25 @@ def main(args: Args):
                 small_d_side = None
                 
                 if color_front is not None:
-                    small_c_front = cv2.resize(color_front, (0,0), fx=0.5, fy=0.5)
+                    # Convert BGR to RGB before saving (RealSense returns BGR format)
+                    color_front_rgb = cv2.cvtColor(color_front, cv2.COLOR_BGR2RGB)
+                    small_c_front = cv2.resize(color_front_rgb, (0,0), fx=0.5, fy=0.5)
                     small_d_front = cv2.resize(depth_front, (0,0), fx=0.5, fy=0.5, interpolation=cv2.INTER_NEAREST)
                 
                 if color_side is not None:
-                    # Side camera: rotate first, then resize
-                    rotated_side = cv2.rotate(color_side, cv2.ROTATE_90_COUNTERCLOCKWISE)
-                    small_c_side = cv2.resize(rotated_side, (0,0), fx=0.5, fy=0.5)
-                    rotated_depth_side = cv2.rotate(depth_side, cv2.ROTATE_90_COUNTERCLOCKWISE)
-                    small_d_side = cv2.resize(rotated_depth_side, (0,0), fx=0.5, fy=0.5, interpolation=cv2.INTER_NEAREST)
-                
+                    # 1. Directly convert raw BGR to RGB for H5 storage
+                    side_rgb_raw = cv2.cvtColor(color_side, cv2.COLOR_BGR2RGB)
+                    
+                    # 2. Resize the RAW image (keep original landscape/horizontal orientation)
+                    small_c_side = cv2.resize(side_rgb_raw, (0,0), fx=0.5, fy=0.5)
+                    
+                    # 3. Resize the RAW depth
+                    small_d_side = cv2.resize(depth_side, (0,0), fx=0.5, fy=0.5, interpolation=cv2.INTER_NEAREST)
+                                
                 # Concatenate images for storage if both cameras are available
                 color_concate = None
                 if small_c_front is not None and small_c_side is not None:
-                    # Resize both to same height for concatenation
-                    h_front, w_front = small_c_front.shape[:2]
-                    h_side, w_side = small_c_side.shape[:2]
-                    
-                    # Use the smaller height as target
-                    target_h = min(h_front, h_side)
-                    # Resize to same height while maintaining aspect ratio
-                    scale_front = target_h / h_front
-                    scale_side = target_h / h_side
-                    new_w_front = int(w_front * scale_front)
-                    new_w_side = int(w_side * scale_side)
-                    
-                    resized_front = cv2.resize(small_c_front, (new_w_front, target_h))
-                    resized_side = cv2.resize(small_c_side, (new_w_side, target_h))
-                    color_concate = np.hstack([resized_front, resized_side])
+                    color_concate = np.hstack([small_c_front, small_c_side])
                 elif small_c_front is not None:
                     color_concate = small_c_front.copy()
                 elif small_c_side is not None:
@@ -290,7 +301,9 @@ def main(args: Args):
                     buffer = {
                         'colors_front': [], 'colors_side': [], 'colors_concate': [],
                         'depths_front': [], 'depths_side': [],
-                        'joints': [], 'ee_poses': [], 'grippers': [], 'timestamps': [], 'actions': []
+                        'joints': [], 'joint_velocities': [],  # Keep joints for reference, add velocities
+                        'ee_poses': [], 'ee_velocities': [], 'ee_angular_velocities': [],  # Add EE velocities
+                        'grippers': [], 'timestamps': [], 'actions': []
                     }
 
                 if small_c_front is not None:
@@ -302,9 +315,16 @@ def main(args: Args):
                 if color_concate is not None:
                     buffer['colors_concate'].append(color_concate)
                 
+                # Save joint positions (for reference) and velocities (for motions dataset)
                 buffer['joints'].append(obs['joint_positions'])
+                buffer['joint_velocities'].append(obs.get('joint_velocities', np.zeros(len(obs['joint_positions']))))
+                
                 buffer['ee_poses'].append(obs.get('ee_pos_quat', np.zeros(7))) # Ensure key exists
-                buffer['grippers'].append(obs.get('gripper_position', [0])[0])
+                # Save EE velocity from RTDE (directly measured, not computed)
+                buffer['ee_velocities'].append(obs.get('ee_velocity', np.zeros(3)))  # [vx, vy, vz] in m/s
+                buffer['ee_angular_velocities'].append(obs.get('ee_angular_velocity', np.zeros(3)))  # [wx, wy, wz] in rad/s
+                gripper_command = action[-1]
+                buffer['grippers'].append(gripper_command)
                 buffer['actions'].append(action)
                 buffer['timestamps'].append(time.time())
 
@@ -370,23 +390,50 @@ def main(args: Args):
                 recording = not recording
                 if recording:
                     log.info(f"Start Recording Episode {episode_idx}...")
-                    # Reset buffers
+                    # Debug: Print current observation data to verify EE pose is not all zeros
+                    obs_debug = env.get_obs()
+                    joints_debug = obs_debug.get('joint_positions', [])
+                    ee_pose_debug = obs_debug.get('ee_pos_quat', [])
+                    gripper_debug = obs_debug.get('gripper_position', [0])
+                    log.info(f"Debug - Joint positions: {joints_debug}")
+                    log.info(f"Debug - EE pose (position x,y,z): {ee_pose_debug[:3] if len(ee_pose_debug) >= 3 else 'N/A'}")
+                    log.info(f"Debug - EE pose (quaternion): {ee_pose_debug[3:] if len(ee_pose_debug) >= 7 else 'N/A'}")
+                    log.info(f"Debug - Gripper position: {gripper_debug}")
+                    
+                    # Check if all data is zero
+                    if np.allclose(joints_debug, 0.0, atol=1e-6):
+                        log.warn("WARNING: All joint positions are zero! Check robot connection.")
+                    if np.allclose(ee_pose_debug[:3], 0.0, atol=1e-6):
+                        log.warn("WARNING: EE position (x,y,z) is all zeros! Check RTDE TCP pose connection.")
+                    else:
+                        log.info(f"✓ EE position is valid: {ee_pose_debug[:3]}")
+                    
                     buffer = {}
                     current_stage_idx = 0
-                    # First stage always starts at frame 0
                     task_switch_frames = [[0, 0]] 
                 else:
-                    log.info(f"Stop Recording. Saving Episode {episode_idx}...")
-                    # Call our robust Saver
-                    success = saver.save_episode(
-                        buffer, 
-                        episode_idx, 
-                        task_descriptions=task_instructions,
-                        task_switch_frames=task_switch_frames,
-                        expected_stages=stages_num
+                    log.info(f"Stop Recording. Triggering background save for Episode {episode_idx}...")
+                    
+                    data_to_save = buffer.copy() 
+                
+                    save_thread = threading.Thread(
+                        target=save_worker,
+                        args=(
+                            saver, 
+                            data_to_save, 
+                            episode_idx, 
+                            task_instructions, 
+                            task_switch_frames, 
+                            stages_num
+                        ),
+                        daemon=False  # Changed to False so thread completes even if main exits
                     )
-                    if success:
-                        episode_idx += 1
+                    save_thread.start()
+                    
+                    log.info(f"Save thread started for Episode {episode_idx}. Ready for next episode. Index updated: {episode_idx} -> {episode_idx + 1}")
+                    episode_idx += 1
+                
+                    buffer = {}
             
             elif key == ord('t') and recording: # Toggle Task Stage
                 if current_stage_idx < len(task_instructions) - 1:

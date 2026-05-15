@@ -1,5 +1,16 @@
-# Third-party dependencies
-third_party/
+# Third-party dependencies (track gello_software only)
+third_party/*
+!third_party/gello_software/
+
+# gello_software: local / heavy (not for git)
+third_party/gello_software/.venv/
+third_party/gello_software/.git/
+third_party/gello_software/.git.bak/
+third_party/gello_software/DynamixelWizard2Setup_x64
+third_party/gello_software/* copy.py
+third_party/gello_software/gello.egg-info/
+third_party/gello_software/third_party/mujoco_menagerie/
+third_party/gello_software/third_party/DynamixelSDK/.git/
 
 # Output and data directories
 output/
